@@ -1,0 +1,9 @@
+pcs_config: conf/pcs_config.yaml
+log:
+  path: log
+  level: INFO
+  max_size: 10
+  backup: 10
+server:
+  host: 127.0.0.1
+  port: 8080

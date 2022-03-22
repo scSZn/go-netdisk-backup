@@ -1,0 +1,6 @@
+/conf/pcs_config.yaml
+/log/
+.idea
+/conf/token.json
+/test/
+*.db
