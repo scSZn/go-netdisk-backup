@@ -137,3 +137,42 @@ func TestFileInfoDao_Update(t *testing.T) {
 		})
 	}
 }
+
+func TestFileInfoDao_DeleteAllByPrefix(t *testing.T) {
+	type fields struct {
+		ctx context.Context
+		DB  *gorm.DB
+	}
+	type args struct {
+		prefix string
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "test",
+			fields: fields{
+				ctx: context.Background(),
+				DB:  database.DB,
+			},
+			args: args{
+				prefix: `E:\Download`,
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &FileInfoDao{
+				ctx: tt.fields.ctx,
+				DB:  tt.fields.DB,
+			}
+			if err := d.DeleteAllByPrefix(tt.args.prefix); (err != nil) != tt.wantErr {
+				t.Errorf("DeleteAllByPrefix() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

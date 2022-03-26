@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	jsoniter "github.com/json-iterator/go"
 
 	"backup/consts"
@@ -36,11 +37,15 @@ type TokenResponse struct {
 	Scope         string `json:"scope"`
 }
 
+var watched = false
+
 func init() {
+	//AccessToken = "121.27abc2481b81f4c2a748f553362974a8.YljI3ndWLKW3GD1cBCdYltnC1vX6-pyHtfyL0-T.5GCmjA"
 	err := RefreshTokenFromFile()
 	if err != nil {
 		logger.Logger.WithError(err).Error("refresh token from file fail")
 	}
+	watchTokenFile()
 }
 
 func StoreToken(accessToken, refreshToken string) error {
@@ -62,28 +67,21 @@ func StoreToken(accessToken, refreshToken string) error {
 		return err
 	}
 
-	tempFileName := config.Config.PcsConfig.TokenPath + "_temp"
-	file, err := os.OpenFile(tempFileName, os.O_WRONLY|os.O_CREATE, 0666)
+	file, err := os.OpenFile(config.Config.PcsConfig.TokenPath, os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
 		logger.Logger.WithField("accessToken", accessToken).WithField("refreshToken", refreshToken).WithError(err).Errorf("open file [%s] fail", config.Config.PcsConfig.TokenPath)
+		return err
+	}
+
+	err = file.Truncate(0)
+	if err != nil {
+		logger.Logger.WithField("accessToken", accessToken).WithField("refreshToken", refreshToken).WithError(err).Errorf("truncate file [%s] fail", config.Config.PcsConfig.TokenPath)
 		return err
 	}
 
 	_, err = file.Write(data)
 	if err != nil {
 		logger.Logger.WithField("accessToken", accessToken).WithField("refreshToken", refreshToken).WithError(err).Errorf("write file [%s] fail", config.Config.PcsConfig.TokenPath)
-		return err
-	}
-
-	err = os.Remove(config.Config.PcsConfig.TokenPath)
-	if err != nil {
-		logger.Logger.WithField("accessToken", accessToken).WithField("refreshToken", refreshToken).WithError(err).Errorf("delete file [%s] fail", config.Config.PcsConfig.TokenPath)
-		return err
-	}
-
-	err = os.Rename(tempFileName, config.Config.PcsConfig.TokenPath)
-	if err != nil {
-		logger.Logger.WithField("accessToken", accessToken).WithField("refreshToken", refreshToken).WithError(err).Errorf("rename file [%s] fail", config.Config.PcsConfig.TokenPath)
 		return err
 	}
 
@@ -140,6 +138,8 @@ func RefreshTokenFromServerByCode(code string) error {
 		return err
 	}
 
+	RefreshTokenFromFile()
+
 	logger.Logger.WithField("access_token", AccessToken).Info("access_token refreshed from server")
 	return nil
 }
@@ -175,6 +175,46 @@ func RefreshTokenFromServerByRefreshCode() error {
 		return err
 	}
 
+	RefreshTokenFromFile()
+
 	logger.Logger.WithField("access_token", AccessToken).Info("access_token refreshed from server")
 	return nil
+}
+
+func watchTokenFile() {
+	filename := config.Config.PcsConfig.TokenPath
+	if filename == "" {
+		return
+	}
+	if watched {
+		return
+	}
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		logger.Logger.WithField("filename", filename).WithError(err).Error("new watcher fail")
+		return
+	}
+
+	err = watcher.Add(filename)
+	if err != nil {
+		logger.Logger.WithField("filename", filename).WithError(err).Error("add watch filename fail")
+		return
+	}
+
+	go func() {
+		for {
+			select {
+			case event := <-watcher.Events:
+				logger.Logger.WithField("event", event).Info("token file changed, start refresh token")
+				err := RefreshTokenFromFile()
+				if err != nil {
+					logger.Logger.WithField("filename", filename).WithError(err).Error("refresh token from file fail")
+					return
+				}
+				logger.Logger.WithField("event", event).Info("refresh token success")
+			}
+		}
+	}()
+
+	watched = true
 }

@@ -49,9 +49,10 @@ const (
 )
 
 const (
-	AuthorizationCodeUrl  = `https://openapi.baidu.com/oauth/2.0/authorize?response_type=code&client_id=%s&redirect_uri=oob&scope=netdisk&display=popup`
-	AccessTokenCodeUrl    = `https://openapi.baidu.com/oauth/2.0/token?grant_type=authorization_code&code=%s&client_id=%s&client_secret=%s&redirect_uri=oob`
-	AccessTokenRefreshUrl = `https://openapi.baidu.com/oauth/2.0/token?grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s&scope=netdisk`
+	AuthorizationCodeUrl        = `https://openapi.baidu.com/oauth/2.0/authorize?response_type=code&client_id=%s&redirect_uri=oob&scope=netdisk&display=popup`
+	AuthorizationCodeUrlWindows = `https://openapi.baidu.com/oauth/2.0/authorize?response_type=code^&client_id=%s^&redirect_uri=oob^&scope=netdisk^&display=popup`
+	AccessTokenCodeUrl          = `https://openapi.baidu.com/oauth/2.0/token?grant_type=authorization_code&code=%s&client_id=%s&client_secret=%s&redirect_uri=oob`
+	AccessTokenRefreshUrl       = `https://openapi.baidu.com/oauth/2.0/token?grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s&scope=netdisk`
 )
 
 // 日志相关信息
@@ -66,8 +67,24 @@ const (
 
 // 文件上传状态
 const (
-	UploadStatusNoUploaded = 0 // 未上传
-	UploadStatusUploading  = 1 // 上传中
-	UploadStatusUploaded   = 2 // 上传完成
-	UploadStatusFail       = 3 // 上传失败
+	UploadStatusNoUploaded   = iota // 未上传
+	UploadStatusWaitUploaded        // 等待上传
+	UploadStatusCancel              // 取消上传
+	UploadStatusUploading           // 上传中
+	UploadStatusUploaded            // 上传完成
+	UploadStatusFail                // 上传失败
 )
+
+const (
+	UploadFailText    = "上传失败"
+	UploadSuccessText = "上传成功"
+	WaitUploadText    = "等待上传"
+	StartUploadText   = "开始上传"
+)
+
+var UploadTextMap = map[int]string{
+	UploadStatusWaitUploaded: WaitUploadText,
+	UploadStatusUploading:    StartUploadText,
+	UploadStatusUploaded:     UploadSuccessText,
+	UploadStatusFail:         UploadFailText,
+}

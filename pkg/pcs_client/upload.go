@@ -16,6 +16,7 @@ import (
 
 	"backup/consts"
 	"backup/internal/token"
+	"backup/pkg/byte_pool"
 	"backup/pkg/group"
 	"backup/pkg/logger"
 )
@@ -49,10 +50,10 @@ func Upload(ctx context.Context, uploadId string, path string, partSeq []int, fi
 	}
 	defer file.Close()
 
-	sendGroup := group.NewMyGroup(ctx, 10, 5).WithContext(ctx).WithErrorStrategy(&RetryStrategy{MaxTime: RetryCount})
+	sendGroup := group.NewMyGroup(ctx, 3, 3).WithContext(ctx).WithErrorStrategy(&RetryStrategy{MaxTime: RetryCount})
 	sendGroup.Start()
 	for _, seq := range partSeq {
-		chunk := make([]byte, consts.Size4MB)
+		chunk := byte_pool.DefaultBytePool.Get()
 		n, err := file.Read(chunk)
 		if err != nil && err != io.EOF {
 			logger.Logger.WithContext(ctx).WithError(err).WithField("filename", filename).Error("read file fail")
@@ -91,7 +92,7 @@ func Upload(ctx context.Context, uploadId string, path string, partSeq []int, fi
 }
 
 func uploadSlice(ctx context.Context, params *UploadParams) error {
-	request, err := params.GenerateRequest(params.Path)
+	request, err := params.GenerateRequest(ctx, params.Path)
 	if err != nil {
 		logger.Logger.WithContext(ctx).WithError(err).Error("generate request fail")
 		return err
@@ -126,14 +127,20 @@ func uploadSlice(ctx context.Context, params *UploadParams) error {
 		return err
 	}
 
+	byte_pool.DefaultBytePool.Put(params.File)
+
 	return nil
 }
 
-func (p *UploadParams) GenerateRequest(filename string) (*http.Request, error) {
+func (p *UploadParams) GenerateRequest(ctx context.Context, filename string) (*http.Request, error) {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithField("filename", filename).Info("pcs upload slice: request generate start")
+
 	address := fmt.Sprintf("https://d.pcs.baidu.com/rest/2.0/pcs/superfile2?method=%s&access_token=%s", consts.MethodUpload, token.AccessToken)
 
-	encodeString, err := p.GenEncodeString()
+	encodeString, err := p.GenEncodeString(ctx)
 	if err != nil {
+		baseLogger.WithError(err).Error("pcs upload slice: generate encode string fail")
 		return nil, err
 	}
 
@@ -144,41 +151,47 @@ func (p *UploadParams) GenerateRequest(filename string) (*http.Request, error) {
 
 	part, err := writer.CreateFormFile("file", filename)
 	if err != nil {
+		baseLogger.WithError(err).Error("pcs upload slice: create file fail")
 		return nil, err
 	}
 
 	_, err = part.Write(p.File)
 	if err != nil {
+		baseLogger.WithError(err).Error("pcs upload slice: write to file fail")
 		return nil, err
 	}
 
 	err = writer.Close()
 	if err != nil {
+		baseLogger.WithError(err).Error("pcs upload slice: close file fail")
 		return nil, err
 	}
 
 	req, err := http.NewRequest("POST", address, buffer)
 	if err != nil {
+		baseLogger.WithError(err).Error("pcs upload slice: request generate fail")
 		return nil, err
 	}
 
 	req.Header.Add("Content-Type", writer.FormDataContentType())
+	baseLogger.Info("pcs upload slice: request generate success")
 	return req, nil
 }
 
-func (p *UploadParams) GenEncodeString() (string, error) {
+func (p *UploadParams) GenEncodeString(ctx context.Context) (string, error) {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithField("params", p).Info("pcs upload slice: generate encode string start")
+
 	body, err := jsoniter.Marshal(p)
 	if err != nil {
-		logger.Logger.WithField("params", fmt.Sprintf("%+v", p)).
-			WithField("error", fmt.Sprintf("%+v", err)).
-			Errorf("marshal params fail")
+		baseLogger.WithField("params", p).WithError(err).Errorf("marshal params fail")
 		return "", err
 	}
 
 	var param = map[string]interface{}{}
 	err = jsoniter.Unmarshal(body, &param)
 	if err != nil {
-		logger.Logger.WithField("params", fmt.Sprintf("%+v", p)).WithError(err).Errorf("unmarshal params fail")
+		baseLogger.WithField("params", p).WithError(err).Errorf("unmarshal params fail")
 		return "", err
 	}
 	var values = url.Values{}
@@ -186,8 +199,10 @@ func (p *UploadParams) GenEncodeString() (string, error) {
 		values.Set(key, fmt.Sprintf("%+v", value))
 	}
 	values.Set("type", "tmpfile")
+	res := values.Encode()
 
-	return values.Encode(), nil
+	baseLogger.WithField("result", res).Info("pcs upload slice: generate encoding string success")
+	return res, nil
 }
 
 type UploadTask struct {

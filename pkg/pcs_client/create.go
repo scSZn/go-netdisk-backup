@@ -47,47 +47,56 @@ type CreateResponse struct {
 	Name           string `json:"name"`
 }
 
-func Create(ctx context.Context, params *CreateParams) (*CreateResponse, error) {
-	logger.Logger.WithContext(ctx).WithField("params", params).Info("pcs: start create")
+func pcsCreate(ctx context.Context, params *CreateParams) (*CreateResponse, error) {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithField("params", params).Info("pcs create start")
+
 	address := fmt.Sprintf("https://pan.baidu.com/rest/2.0/xpan/file?method=%s&access_token=%s", consts.MethodCreate, token.AccessToken)
 
-	encodeString, err := params.GenEncodeString()
+	encodeString, err := params.GenEncodeString(ctx)
 	if err != nil {
-		logger.Logger.WithContext(ctx).WithField("params", fmt.Sprintf("%+v", params)).WithField("error", fmt.Sprintf("%+v", err)).Errorf("construct encode string fail")
+		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: construct encode string fail")
 		return nil, err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, address, bytes.NewBufferString(encodeString))
 	if err != nil {
-		logger.Logger.WithContext(ctx).WithField("params", fmt.Sprintf("%+v", params)).WithField("error", fmt.Sprintf("%+v", err)).Errorf("construct request fail")
+		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: construct request fail")
 		return nil, err
 	}
 	req = req.WithContext(ctx)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	logger.Logger.WithContext(ctx).WithField("request", fmt.Sprintf("%+v", req)).Info("start request create")
 	response, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Logger.WithContext(ctx).WithField("params", fmt.Sprintf("%+v", params)).WithField("error", fmt.Sprintf("%+v", err)).Errorf("precreate fail")
+		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: request fail")
 		return nil, err
 	}
 	defer response.Body.Close()
 
 	data, err := io.ReadAll(response.Body)
-	logger.Logger.WithContext(ctx).WithField("response", string(data)).Info("request create finished")
+	baseLogger.WithField("response_body", string(data)).Info("pcs create: response body")
 
 	var resp = &CreateResponse{}
 	err = jsoniter.Unmarshal(data, resp)
 	if err != nil {
-		logger.Logger.WithContext(ctx).WithField("params", fmt.Sprintf("%+v", params)).WithField("error", fmt.Sprintf("%+v", err)).Errorf("unmarshal response fail")
+		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: unmarshal response fail")
 		return nil, err
 	}
 
-	logger.Logger.WithContext(ctx).WithField("response", resp).Info("pcs: end create")
+	if resp.Errno != consts.ErrnoSuccess {
+		baseLogger.WithField("response", resp).Error("pcs create: errno is not zero")
+		return nil, fmt.Errorf("create fail")
+	}
+
+	baseLogger.WithField("response", resp).Info("pcs create: create success")
 	return resp, nil
 }
 
-func (c *CreateParams) GenEncodeString() (string, error) {
+func (c *CreateParams) GenEncodeString(ctx context.Context) (string, error) {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithField("params", c).Info("pcs create: generate encode string start")
+
 	tempListStr := make([]string, 0, len(c.BlockListStr))
 	for _, str := range c.BlockList {
 		tempListStr = append(tempListStr, fmt.Sprintf("\"%s\"", str))
@@ -96,24 +105,28 @@ func (c *CreateParams) GenEncodeString() (string, error) {
 
 	body, err := jsoniter.Marshal(c)
 	if err != nil {
-		logger.Logger.WithField("params", fmt.Sprintf("%+v", c)).
-			WithField("error", fmt.Sprintf("%+v", err)).
-			Errorf("marshal params fail")
+		baseLogger.WithField("params", c).WithError(err).Errorf("marshal params fail")
 		return "", err
 	}
 
 	var param = map[string]interface{}{}
 	err = jsoniter.Unmarshal(body, &param)
 	if err != nil {
-		logger.Logger.WithField("params", fmt.Sprintf("%+v", c)).
-			WithField("error", fmt.Sprintf("%+v", err)).
-			Errorf("unmarshal params fail")
+		baseLogger.WithField("params", c).WithError(err).Errorf("unmarshal params fail")
 		return "", err
 	}
 	var values = url.Values{}
 	for key, value := range param {
-		values.Set(key, fmt.Sprintf("%+v", value))
+		switch value.(type) {
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float64, float32:
+			str, _ := jsoniter.MarshalToString(value)
+			values.Set(key, str)
+		default:
+			values.Set(key, fmt.Sprintf("%+v", value))
+		}
 	}
 
-	return values.Encode(), nil
+	var res = values.Encode()
+	baseLogger.WithField("result", res).Info("pcs create: generate encode string success")
+	return res, nil
 }

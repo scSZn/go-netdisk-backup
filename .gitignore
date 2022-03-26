@@ -1,6 +1,11 @@
 /conf/pcs_config.yaml
-/log/
+*log
 .idea
 /conf/token.json
 /test/
 *.db
+/ui/token_ui/
+/pcs_config.yaml
+/token.json
+*.exe
+*.syso

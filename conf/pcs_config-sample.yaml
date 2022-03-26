@@ -1,5 +1,0 @@
-pcs:
-  app_key: aaaaaaaaaa           # 百度开发者中心的app_key
-  secret_key: vvvvvvvv        # 百度开发者中心的secret_key
-  token_path: ~/.backup/conf/token.json # token存储的路径，json格式
-  path_prefix: /apps/test       # 文件上传的路径（百度网盘）

@@ -30,6 +30,7 @@ func init() {
 	DB.Callback().Create().Before("gorm:update").Register("gorm:update_time", UpdateTimeCallback("update_time"))
 	DB.Callback().Create().Before("gorm:delete").Register("gorm:update_time", UpdateTimeCallback("update_time"))
 	DB.AutoMigrate(&model.FileInfo{})
+	DB.AutoMigrate(&model.BackupPath{})
 }
 
 func TransferLevel(level string) gormLogger.LogLevel {

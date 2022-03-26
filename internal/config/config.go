@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/spf13/viper"
@@ -9,19 +10,42 @@ import (
 
 var once sync.Once
 
-var pcsConfigPathKey = "pcs_config"
+const configString = `pcs_config: pcs_config.yaml
+upload_config: upload_config.yaml
+log:
+  path: log
+  level: INFO
+  max_size: 10
+  backup: 10
+server:
+  host: 127.0.0.1
+  port: 8080`
+
+var (
+	pcsConfigPathKey    = "pcs_config"
+	uploadConfigPathKey = "upload_config"
+
+	UploadCountKey = "upload_count"
+
+	PcsConfigPath    string
+	UploadConfigPath string
+
+	ConfigViper       = viper.New()
+	PcsConfigViper    = viper.New()
+	UploadConfigViper = viper.New()
+)
 
 var Config config
 
 type config struct {
 	LogConfig    LogConfig    `json:"log"`
-	PcsConfig    pcsConfig    `json:"pcs_config"`
+	PcsConfig    PcsConfig    `json:"pcs_config"`
 	ServerConfig serverConfig `json:"server_config"`
 }
 
-type pcsConfig struct {
+type PcsConfig struct {
 	AppKey     string `json:"app_key" mapstructure:"app_key"`
-	AppSecret  string `json:"secret_key" mapstructure:"secret_key"`
+	AppSecret  string `json:"app_secret" mapstructure:"app_secret"`
 	TokenPath  string `json:"token_path" mapstructure:"token_path"`
 	PathPrefix string `json:"path_prefix" mapstructure:"path_prefix"`
 }
@@ -40,34 +64,32 @@ type serverConfig struct {
 
 func init() {
 	once.Do(func() {
-		v := viper.New()
-		v.SetConfigName("conf")
-		v.SetConfigType("yaml")
-		v.AddConfigPath("./")
-		v.AddConfigPath("./conf")
+		ConfigViper.SetConfigType("yaml")
+		ConfigViper.ReadConfig(strings.NewReader(configString))
 
-		err := v.ReadInConfig()
-		if err != nil {
-			log.Fatalf("read config fail, err: %+v", err)
-		}
+		PcsConfigPath = ConfigViper.GetString(pcsConfigPathKey)
+		UploadConfigPath = ConfigViper.GetString(uploadConfigPathKey)
 
-		pcsConfigPath := v.GetString(pcsConfigPathKey)
-		v.SetConfigFile(pcsConfigPath)
-		err = v.MergeInConfig()
-		if err != nil {
-			log.Fatalf("merge config fail, err: %+v", err)
-		}
-
-		err = v.UnmarshalKey("log", &Config.LogConfig)
+		// 获取日志配置
+		err := ConfigViper.UnmarshalKey("log", &Config.LogConfig)
 		if err != nil {
 			log.Fatalf("unmarshal key `log` fail, err: %+v", err)
 		}
 
-		err = v.UnmarshalKey("pcs", &Config.PcsConfig)
+		// 获取PCS配置
+		PcsConfigViper.SetConfigFile(PcsConfigPath)
+		PcsConfigViper.ReadInConfig()
+		err = PcsConfigViper.UnmarshalKey("pcs", &Config.PcsConfig)
 		if err != nil {
 			log.Fatalf("unmarshal key `pcs` fail, err: %+v", err)
 		}
 
-		err = v.UnmarshalKey("server", &Config.ServerConfig)
+		UploadConfigViper.SetConfigFile(UploadConfigPath)
+		UploadConfigViper.ReadInConfig()
+		UploadConfigViper.WatchConfig()
 	})
+}
+
+func (p *PcsConfig) IsValid() bool {
+	return !(p.AppKey == "" || p.AppSecret == "")
 }

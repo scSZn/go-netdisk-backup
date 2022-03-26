@@ -43,7 +43,7 @@ func GetSubDir(ctx context.Context, dirname string) ([]string, error) {
 		result = append(result, subSubDirs...)
 	}
 
-	logger.Logger.WithContext(ctx).WithField("path", dirname).WithField("subdir", result).Error("end get subdir")
+	logger.Logger.WithContext(ctx).WithField("path", dirname).WithField("subdir", result).Info("end get subdir")
 	return result, nil
 }
 
@@ -71,6 +71,6 @@ func GetSubDirV2(ctx context.Context, dirname string) ([]string, error) {
 		return nil, err
 	}
 
-	logger.Logger.WithContext(ctx).WithField("path", dirname).WithField("subdir", result).Error("end get subdir")
+	logger.Logger.WithContext(ctx).WithField("path", dirname).WithField("subdir", result).Info("end get subdir")
 	return result, nil
 }

@@ -53,7 +53,7 @@ func UploadFile(ctx context.Context, filename string, serverFilename string) err
 		RType:     consts.RTypeOverride,
 	}
 
-	preCreateResponse, err := PreCreate(ctx, preCreateParams)
+	preCreateResponse, err := pcsPreCreate(ctx, preCreateParams)
 	if err != nil {
 		logger.Logger.WithContext(ctx).WithError(err).Error("precreate fail")
 		return err
@@ -90,7 +90,7 @@ func UploadFile(ctx context.Context, filename string, serverFilename string) err
 		Mode:       consts.ModeManual,
 		IsRevision: consts.EnableMultiVersion,
 	}
-	createResponse, err := Create(ctx, createParams)
+	createResponse, err := pcsCreate(ctx, createParams)
 	if err != nil {
 		logger.Logger.WithContext(ctx).WithError(err).Error("create fail")
 		return err
@@ -101,6 +101,98 @@ func UploadFile(ctx context.Context, filename string, serverFilename string) err
 		return fmt.Errorf("create fail")
 	}
 
+	return nil
+}
+
+func UploadFileWithSignal(ctx context.Context, filename string, serverPath string, signal chan struct{}) error {
+	baseLogger := logger.Logger.WithContext(ctx)
+	serverPath = path.Join(config.Config.PcsConfig.PathPrefix, serverPath)
+	serverPath = filepath.Clean(serverPath)
+
+	baseLogger.WithFields(map[string]interface{}{
+		"filename":        filename,
+		"server_filename": serverPath,
+	}).Info("upload start")
+
+	if serverPath == "" {
+		baseLogger.WithField("filename", filename).Warn("serverPath is empty")
+		return errors.Errorf("serverFilename is empty, filename is %s", filename)
+	}
+
+	list, err := util.GetBlockList(ctx, filename)
+	if err != nil {
+		baseLogger.WithError(err).Error("get block list fail")
+		return err
+	}
+
+	stat, err := os.Stat(filename)
+	if err != nil {
+		baseLogger.WithError(err).Error("get file stat fail")
+		return err
+	}
+
+	//if stat.Size() == 0 {
+	//	if signal != nil {
+	//		signal <- struct{}{}
+	//	}
+	//	return nil
+	//}
+
+	var isDir uint8 = 0
+	if stat.IsDir() {
+		isDir = 1
+	}
+
+	preCreateParams := &PreCreateParams{
+		Path:      serverPath,
+		Size:      stat.Size(),
+		IsDir:     isDir,
+		BlockList: list,
+		RType:     consts.RTypeOverride,
+	}
+
+	preCreateResponse, err := pcsPreCreate(ctx, preCreateParams)
+	if err != nil {
+		baseLogger.WithError(err).Error("precreate fail")
+		if preCreateResponse != nil && preCreateResponse.Errno == consts.ErrnoAccessTokenInvalid { // 如果是token失效
+			baseLogger.Error("access_token is expired")
+			err = token.RefreshTokenFromServerByRefreshCode()
+			if err != nil {
+				baseLogger.WithError(err).Error("refresh access_token fail")
+				return err
+			}
+			return errors.New("access_token is expired")
+		}
+		return err
+	}
+
+	err = pcsUploadWithSignal(ctx, preCreateResponse.UploadId, serverPath, preCreateResponse.BlockList, filename, signal)
+
+	if err != nil {
+		baseLogger.WithError(err).Error("pcs upload fail")
+		return err
+	}
+
+	createParams := &CreateParams{
+		Path:       serverPath,
+		Size:       stat.Size(),
+		IsDir:      isDir,
+		BlockList:  list,
+		UploadId:   preCreateResponse.UploadId,
+		Mode:       consts.ModeManual,
+		IsRevision: consts.EnableMultiVersion,
+	}
+
+	_, err = pcsCreate(ctx, createParams)
+	if err != nil {
+		baseLogger.WithError(err).Errorf("create fail")
+		return err
+	}
+
+	if signal != nil {
+		signal <- struct{}{}
+	}
+	baseLogger.Info("upload success")
 	return nil
 }
 
@@ -200,17 +292,17 @@ func UploadDirectory(ctx context.Context, root string, excludeDirectory string, 
 	})
 }
 
-func UploadFileWithRetry(ctx context.Context, filename string, serverFilename string, maxRetry int) error {
-	var count int = 0
-	var err error
-
-	for count < maxRetry {
-		count++
-		err = UploadFile(ctx, filename, serverFilename)
-		if err != nil {
-			logger.Logger.WithContext(ctx).WithError(err).WithField("filename", filename).Error("upload %s fail, retry %d time", filename, count)
-		}
-	}
-
-	return err
-}
+//func UploadFileWithRetry(ctx context.Context, filename string, serverFilename string, maxRetry int) error {
+//	var count int = 0
+//	var err error
+//
+//	for count < maxRetry {
+//		count++
+//		err = UploadFile(ctx, filename, serverFilename)
+//		if err != nil {
+//			logger.Logger.WithContext(ctx).WithError(err).WithField("filename", filename).Error("upload %s fail, retry %d time", filename, count)
+//		}
+//	}
+//
+//	return err
+//}

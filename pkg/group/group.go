@@ -122,7 +122,6 @@ func (g *MyGroup) executeTask(task TaskInterface) {
 // 2. 如果协程池没有关闭，则加入任务列表
 func (g *MyGroup) Submit(task TaskInterface) error {
 	g.mux.RLock()
-	defer g.mux.RUnlock()
 	if g.isClose {
 		return ErrorGoroutinePoolIsStopped
 	}
@@ -131,8 +130,14 @@ func (g *MyGroup) Submit(task TaskInterface) error {
 	if task == nil {
 		return ErrorTaskInvalid
 	}
+	g.mux.RUnlock()
+
 	g.wg.Add(1)
-	g.tasks <- task
+	select {
+	case g.tasks <- task:
+	case <-g.ctx.Done():
+		g.Stop()
+	}
 
 	return nil
 }

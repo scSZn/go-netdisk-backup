@@ -20,14 +20,14 @@ func TestUploadFile(t *testing.T) {
 			name: "UploadFileTest",
 			args: args{
 				ctx:            context.TODO(),
-				filename:       "/Users/didi/Downloads/productid_map",
-				serverFilename: "productid_map",
+				filename:       "E:\\Temp\\2020年12月四级真题\\2020年12月英语四级解析第1套.pdf",
+				serverFilename: "/apps/test/Temp\\2020年12月四级真题\\2020年12月英语四级解析第1套.pdf",
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := UploadFile(tt.args.ctx, tt.args.filename, tt.args.serverFilename); (err != nil) != tt.wantErr {
+			if err := UploadFileWithSignal(tt.args.ctx, tt.args.filename, tt.args.serverFilename, nil); (err != nil) != tt.wantErr {
 				t.Errorf("UploadFile() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
