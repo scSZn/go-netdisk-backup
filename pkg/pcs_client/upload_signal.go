@@ -96,7 +96,7 @@ func uploadSliceWithSignal(ctx context.Context, params *UploadParams, signal cha
 	request.WithContext(ctx)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		baseLogger.WithError(err).Error("upload file fail")
+		baseLogger.WithError(err).Error("upload request fail")
 		return err
 	}
 
