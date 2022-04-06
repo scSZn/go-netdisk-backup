@@ -76,19 +76,7 @@ func (g *MyGroup) work() {
 			g.executeTask(task)
 		case <-g.ctx.Done(): // 如果Context超时或者取消
 			g.Stop()
-			g.cleanTaskChan()
 			g.errorStrategy.ErrorDeal(g, g.ctx.Err(), nil)
-		}
-	}
-}
-
-// 善后工作，如果队列中还有任务没执行完成，继续执行
-func (g *MyGroup) cleanTaskChan() {
-	var ok = true
-	var task TaskInterface
-	for ok {
-		if task, ok = <-g.tasks; ok {
-			g.executeTask(task)
 		}
 	}
 }

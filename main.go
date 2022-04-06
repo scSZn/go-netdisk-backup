@@ -10,6 +10,8 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"gopkg.in/natefinch/lumberjack.v2"
 
 	"backup/internal/config"
@@ -46,6 +48,8 @@ func main() {
 		log.Println(http.ListenAndServe(":6060", nil))
 	}()
 
+	background := canvas.NewImageFromResource(resourceBackgroundPng)
+	background.Translucency = 0.7
 	scanner.Manager.Start(util.NewContext())
 	backupApp := app.New()
 	backupApp.Settings().SetTheme(theme.CustomTheme)
@@ -55,10 +59,9 @@ func main() {
 	//w.SetCloseIntercept(func() {
 	//	w.Hide()
 	//})
-
 	w.Resize(fyne.NewSize(1000, 600))
 
-	w.SetContent(ui.Create(w))
+	w.SetContent(container.NewMax(background, ui.Create(w)))
 	w.ShowAndRun()
 }
 
