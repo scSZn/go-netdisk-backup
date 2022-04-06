@@ -111,11 +111,21 @@ func (i *UploadItem) Upload() {
 			if current > total {
 				i.cancelFunc()
 				baseLogger.WithField("upload_item", i).Error("upload fail, too many signal")
+				// 更改数据库状态为上传失败
+				err = fileInfoDao.Update(map[string]interface{}{
+					"upload_status": consts.UploadStatusFail,
+				}, i.path)
+				if err != nil {
+					baseLogger.WithField("status", consts.UploadStatusFail).Warn("upload file info status fail")
+				}
 				i.UploadStatus(consts.UploadStatusFail) // 更新状态为上传失败
 				i.list.release(i)                       // list从上传列表中移除item
 				return
 			}
 			i.progress = fmt.Sprintf("%.2f%%", float64(current*100)/float64(total))
+			if current == total { // 补充更新，否则可能出现覆盖
+				i.UploadStatus(consts.UploadStatusUploaded)
+			}
 		}
 	}
 }

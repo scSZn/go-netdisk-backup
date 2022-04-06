@@ -31,5 +31,10 @@ func NewUploadTabItem(window fyne.Window) *container.TabItem {
 				}
 				retryCancelFunc = ExportUploadList.RetryAll()
 			},
+		}, &widget.Button{
+			Text: "刷新",
+			OnTapped: func() {
+				ExportUploadList.Refresh()
+			},
 		}), nil, nil, nil, container.NewVScroll(ExportUploadList)))
 }

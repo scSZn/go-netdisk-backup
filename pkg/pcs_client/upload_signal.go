@@ -52,6 +52,7 @@ func pcsUploadWithSignal(ctx context.Context, uploadId string, path string, part
 			Name:   fmt.Sprintf("%s_%d", path, seq),
 			Params: params,
 			Signal: signal,
+			client: &http.Client{},
 		}
 
 		baseLogger.WithField("task", task).Info("task submit")
@@ -71,7 +72,7 @@ func pcsUploadWithSignal(ctx context.Context, uploadId string, path string, part
 	return nil
 }
 
-func uploadSliceWithSignal(ctx context.Context, params *UploadParams, signal chan struct{}) error {
+func uploadSliceWithSignal(ctx context.Context, params *UploadParams, client *http.Client, signal chan struct{}) error {
 	baseLogger := logger.Logger.WithContext(ctx)
 	baseLogger.WithFields(map[string]interface{}{
 		"params":        params,
@@ -86,7 +87,7 @@ func uploadSliceWithSignal(ctx context.Context, params *UploadParams, signal cha
 		return err
 	}
 	request.WithContext(ctx)
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		baseLogger.WithError(err).Error("upload request fail")
 		return err
@@ -131,10 +132,11 @@ type UploadTaskWithSignal struct {
 	RetryCount int           `json:"retry_count"`
 	Params     *UploadParams `json:"params"`
 	Signal     chan struct{} `json:"-"`
+	client     *http.Client  `json:"-"`
 }
 
 func (r *UploadTaskWithSignal) Run(ctx context.Context) error {
-	return uploadSliceWithSignal(ctx, r.Params, r.Signal)
+	return uploadSliceWithSignal(ctx, r.Params, r.client, r.Signal)
 }
 
 type RetryStrategyWithSignal struct {
