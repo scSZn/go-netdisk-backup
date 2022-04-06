@@ -55,6 +55,7 @@ func main() {
 	//w.SetCloseIntercept(func() {
 	//	w.Hide()
 	//})
+
 	w.Resize(fyne.NewSize(1000, 600))
 
 	w.SetContent(ui.Create(w))

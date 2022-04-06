@@ -55,19 +55,11 @@ func pcsUploadWithSignal(ctx context.Context, uploadId string, path string, part
 		}
 
 		baseLogger.WithField("task", task).Info("task submit")
-		var retryCounter = 0
-		for retryCounter < RetryCount {
-			err = sendGroup.Submit(task)
-			if err == nil {
-				break
-			}
-			baseLogger.WithContext(ctx).WithField("task", task).WithError(err).Warn("task submit fail, retry")
-			retryCounter++
-		}
-		if retryCounter >= RetryCount {
+		err = sendGroup.Submit(task)
+		if err != nil {
 			baseLogger.WithContext(ctx).WithField("task", task).WithError(err).Warn("task submit fail")
 			sendGroup.Cancel()
-			break
+			return err
 		}
 	}
 
@@ -109,6 +101,9 @@ func uploadSliceWithSignal(ctx context.Context, params *UploadParams, signal cha
 	}
 	baseLogger.WithField("response_body", string(data)).Info("pcs upload slice: response body")
 
+	if string(data) == "" {
+		baseLogger.WithField("response", response).Error("response body data is empty")
+	}
 	var resp = &UploadResponse{}
 	err = jsoniter.Unmarshal(data, &resp)
 	if err != nil {
@@ -147,7 +142,9 @@ type RetryStrategyWithSignal struct {
 }
 
 func (s RetryStrategyWithSignal) ErrorDeal(group *group.MyGroup, err error, task group.TaskInterface) {
-	if task == nil {
+	// 如果任务为空，返回
+	// 如果err是上下文取消的err，返回
+	if task == nil || err == context.Canceled {
 		return
 	}
 	retryTask, ok := task.(*UploadTaskWithSignal)

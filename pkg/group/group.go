@@ -33,8 +33,7 @@ type MyGroup struct {
 	Once *sync.Once // 保证err只有一个
 	Err  error      // 执行过程中保存错误
 
-	stopChan chan struct{} // 停止信号的channel
-	stopOnce *sync.Once    // 保证只关闭一次tasks channel和stopChan
+	stopOnce *sync.Once // 保证只关闭一次tasks channel和stopChan
 
 	mux     *sync.RWMutex // 保护状态
 	isClose bool          // 协程池是否已关闭
@@ -50,7 +49,6 @@ func NewMyGroup(ctx context.Context, size int, queueSize int) *MyGroup {
 	group := &MyGroup{
 		size:          size,
 		tasks:         tasks,
-		stopChan:      make(chan struct{}),
 		wg:            &sync.WaitGroup{},
 		Once:          &sync.Once{},
 		stopOnce:      &sync.Once{},
@@ -76,13 +74,10 @@ func (g *MyGroup) work() {
 				continue
 			}
 			g.executeTask(task)
-		case <-g.ctx.Done(): // 如果Context超时
+		case <-g.ctx.Done(): // 如果Context超时或者取消
 			g.Stop()
 			g.cleanTaskChan()
 			g.errorStrategy.ErrorDeal(g, g.ctx.Err(), nil)
-		case <-g.stopChan:
-			g.cleanTaskChan()
-			return
 		}
 	}
 }
@@ -138,7 +133,6 @@ func (g *MyGroup) Submit(task TaskInterface) error {
 	case <-g.ctx.Done():
 		g.Stop()
 	}
-
 	return nil
 }
 
@@ -165,13 +159,11 @@ func (g *MyGroup) Context() context.Context {
 // 2. 关闭任务队列
 // 3. 通知子协程退出
 func (g *MyGroup) Stop() {
-	g.mux.Lock()
-	defer g.mux.Unlock()
-
-	g.isClose = true
+	// 必须先cancel，如果先关闭tasks通道，会导致AddItem的时候往一个关闭的通道塞数据，报错
 	g.stopOnce.Do(func() {
-		close(g.stopChan)
-		close(g.tasks)
+		g.cancel()
+		g.isClose = true
+		close(g.tasks) // 保证仅关闭一次
 	})
 }
 
