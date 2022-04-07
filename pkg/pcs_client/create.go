@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	jsoniter "github.com/json-iterator/go"
+	"github.com/pkg/errors"
 
 	"backup/consts"
 	"backup/internal/token"
@@ -73,6 +74,11 @@ func pcsCreate(ctx context.Context, params *CreateParams) (*CreateResponse, erro
 		return nil, err
 	}
 	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		baseLogger.WithField("response", response).Error("response status code is not 200")
+		return nil, errors.Errorf("response status code is not 200")
+	}
 
 	data, err := io.ReadAll(response.Body)
 	baseLogger.WithField("response_body", string(data)).Info("pcs create: response body")

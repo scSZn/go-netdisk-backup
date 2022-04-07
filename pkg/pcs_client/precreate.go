@@ -67,6 +67,11 @@ func pcsPreCreate(ctx context.Context, params *PreCreateParams) (*PreCreateRespo
 	}
 	defer response.Body.Close()
 
+	if response.StatusCode != http.StatusOK {
+		baseLogger.WithField("response", response).Error("response status code is not 200")
+		return nil, errors.Errorf("response status code is not 200")
+	}
+
 	data, err := io.ReadAll(response.Body)
 	baseLogger.WithField("response", string(data)).Info("pcs precreate response")
 

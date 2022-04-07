@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/google/uuid"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
 
@@ -53,6 +54,7 @@ func pcsUploadWithSignal(ctx context.Context, uploadId string, path string, part
 			Params: params,
 			Signal: signal,
 			client: &http.Client{},
+			SpanId: uuid.New().String(),
 		}
 
 		baseLogger.WithField("task", task).Info("task submit")
@@ -92,8 +94,16 @@ func uploadSliceWithSignal(ctx context.Context, params *UploadParams, client *ht
 		baseLogger.WithError(err).Error("upload request fail")
 		return err
 	}
-
 	defer response.Body.Close()
+
+	baseLogger.WithFields(map[string]interface{}{
+		"header": response.Header,
+		"status": response.Status,
+	}).Info("upload slice: response info")
+	if response.StatusCode != http.StatusOK {
+		baseLogger.WithField("response", response).Error("response status code is not 200")
+		return errors.Errorf("response status code is not 200")
+	}
 
 	data, err := ioutil.ReadAll(response.Body)
 	if err != nil {
@@ -132,10 +142,12 @@ type UploadTaskWithSignal struct {
 	RetryCount int           `json:"retry_count"`
 	Params     *UploadParams `json:"params"`
 	Signal     chan struct{} `json:"-"`
-	client     *http.Client  `json:"-"`
+	SpanId     string        `json:"span_id"`
+	client     *http.Client
 }
 
 func (r *UploadTaskWithSignal) Run(ctx context.Context) error {
+	ctx = context.WithValue(ctx, consts.LogSpanId, r.SpanId)
 	return uploadSliceWithSignal(ctx, r.Params, r.client, r.Signal)
 }
 

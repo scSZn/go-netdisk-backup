@@ -22,8 +22,12 @@ func (l *LogFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 	// 获取TraceID
 	traceId := getTraceInfo(entry.Context)
-	var slice = make([]string, 0, len(entry.Data)+1)
+	var slice = make([]string, 0, len(entry.Data)+2)
 	slice = append(slice, fmt.Sprintf("%s=%v", consts.LogTraceKey, traceId))
+
+	// 获取SpanID
+	spanId := getSpanId(entry.Context)
+	slice = append(slice, fmt.Sprintf("%s=%v", consts.LogSpanId, spanId))
 
 	// 拼装消息
 	for k, v := range entry.Data {
@@ -42,6 +46,14 @@ func (l *LogFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 func getTraceInfo(ctx context.Context) interface{} {
 	if ctx != nil {
 		return ctx.Value(consts.LogTraceKey)
+	}
+	return ""
+}
+
+// 如果是gin.Context，从gin.Context中获取traceId，否则从context中获取traceId
+func getSpanId(ctx context.Context) interface{} {
+	if ctx != nil {
+		return ctx.Value(consts.LogSpanId)
 	}
 	return ""
 }
