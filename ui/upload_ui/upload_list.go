@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"backup/consts"
+	"backup/internal/config"
 	"backup/pkg/logger"
 	"backup/pkg/util"
 	ui_util "backup/ui/util"
@@ -27,26 +28,31 @@ type UploadList struct {
 	lock  sync.RWMutex
 	items []*UploadItem
 
-	window         fyne.Window
-	uploadingItems []*UploadItem
-	uploadingQueue chan struct{}
-	waitQueue      chan *UploadItem
+	window          fyne.Window
+	uploadingItems  []*UploadItem
+	uploadingSignal chan struct{}
+	waitQueue       chan *UploadItem
 
 	signal chan *UploadItem
 }
 
 func NewUploadList(window fyne.Window) *UploadList {
 	list := &UploadList{
-		items:          []*UploadItem{},
-		window:         window,
-		waitQueue:      make(chan *UploadItem, 100), // 等待队列
-		uploadingItems: make([]*UploadItem, 0, 5),   // 最大同时上传5个文件
-		uploadingQueue: make(chan struct{}, 5),      // 最大同时上传5个文件
+		items:           []*UploadItem{},
+		window:          window,
+		waitQueue:       make(chan *UploadItem, 100), // 等待队列
+		uploadingItems:  make([]*UploadItem, 0, 10),  // 同时上传文件个数
+		uploadingSignal: make(chan struct{}, 10),     // 上传文件的信号量，用于控制最大上传数量
 	}
 
 	list.List.CreateItem = list.CreateItem
 	list.List.Length = list.Length
 	list.List.UpdateItem = list.UpdateItem
+
+	uploadCount := config.GetUploadCount()
+	for i := 0; i < uploadCount; i++ {
+		list.uploadingSignal <- struct{}{}
+	}
 
 	list.ExtendBaseWidget(list)
 	go list.upload()  // 启动协程开始上传任务
@@ -174,9 +180,16 @@ func (l *UploadList) RetryAll() *context.CancelFunc {
 // 1. 从上传列表中移除
 // 2. 信号量+1
 func (l *UploadList) release(item *UploadItem) {
-	<-l.uploadingQueue // 空出队列
 	l.lock.Lock()
-	defer l.lock.Unlock()
+	var length = len(l.uploadingItems)
+	// 判断是否需要塞入信号
+	defer func() {
+		l.lock.Unlock()
+
+		uploadCount := config.GetUploadCount()
+		// 增加上传名额
+		l.addSignal(uploadCount - length)
+	}()
 
 	// 将item从uploadingItems中移除
 	var removeIndex = -1
@@ -188,7 +201,7 @@ func (l *UploadList) release(item *UploadItem) {
 	}
 	if removeIndex >= 0 {
 		l.uploadingItems = append(l.uploadingItems[:removeIndex], l.uploadingItems[removeIndex+1:]...)
-		return
+		length -= 1
 	}
 }
 
@@ -219,6 +232,24 @@ func (l *UploadList) AddItem(ctx context.Context, item *UploadItem) {
 	}
 }
 
+func (l *UploadList) AddSignal() {
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	length := len(l.uploadingItems)
+	uploadCount := config.GetUploadCount()
+
+	l.addSignal(uploadCount - length)
+}
+
+func (l *UploadList) addSignal(count int) {
+	if count <= 0 {
+		return
+	}
+	for i := 0; i < count; i++ {
+		l.uploadingSignal <- struct{}{}
+	}
+}
+
 func (l *UploadList) upload() {
 	// 从waitQueue中获取item，添加到uploadingQueue队列中
 	for {
@@ -227,7 +258,7 @@ func (l *UploadList) upload() {
 		case item := <-l.waitQueue:
 			// 如果item的状态已经不是待上传了，掠过
 			if item.state == consts.UploadStatusWaitUploaded {
-				l.uploadingQueue <- struct{}{}                    // 控制上传个数
+				<-l.uploadingSignal                               // 控制上传个数
 				l.uploadingItems = append(l.uploadingItems, item) // 存储上传的item
 				fmt.Println(item)
 				go item.Upload() // 开始上传

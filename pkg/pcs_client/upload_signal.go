@@ -36,7 +36,7 @@ func pcsUploadWithSignal(ctx context.Context, uploadId string, path string, part
 	}
 	defer file.Close()
 
-	sendGroup := group.NewMyGroup(ctx, 3, 3).WithErrorStrategy(&RetryStrategyWithSignal{MaxTime: RetryCount})
+	sendGroup := group.NewMyGroup(ctx, 1, 3).WithErrorStrategy(&RetryStrategyWithSignal{MaxTime: RetryCount})
 	sendGroup.Start()
 	for _, seq := range partSeq {
 		chunk := byte_pool.DefaultBytePool.Get()

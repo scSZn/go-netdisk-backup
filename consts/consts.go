@@ -55,6 +55,13 @@ const (
 	AccessTokenRefreshUrl       = `https://openapi.baidu.com/oauth/2.0/token?grant_type=refresh_token&refresh_token=%s&client_id=%s&client_secret=%s&scope=netdisk`
 )
 
+const (
+	UploadCountKey     = "upload_count"
+	EmptyUploadCount   = 0
+	DefaultUploadCount = 3
+	MaxUploadCount     = 10
+)
+
 // 日志相关信息
 const (
 	LogTraceKey   = TraceKey("trace_id")

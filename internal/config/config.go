@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/spf13/viper"
+
+	"backup/consts"
 )
 
 var once sync.Once
@@ -24,8 +26,6 @@ server:
 var (
 	pcsConfigPathKey    = "pcs_config"
 	uploadConfigPathKey = "upload_config"
-
-	UploadCountKey = "upload_count"
 
 	PcsConfigPath    string
 	UploadConfigPath string
@@ -84,6 +84,7 @@ func init() {
 			log.Fatalf("unmarshal key `pcs` fail, err: %+v", err)
 		}
 
+		// 上传配置
 		UploadConfigViper.SetConfigFile(UploadConfigPath)
 		UploadConfigViper.ReadInConfig()
 		UploadConfigViper.WatchConfig()
@@ -92,4 +93,12 @@ func init() {
 
 func (p *PcsConfig) IsValid() bool {
 	return !(p.AppKey == "" || p.AppSecret == "")
+}
+
+func GetUploadCount() int {
+	uploadCount := UploadConfigViper.GetInt(consts.UploadCountKey)
+	if uploadCount <= consts.EmptyUploadCount || uploadCount > consts.MaxUploadCount {
+		uploadCount = consts.DefaultUploadCount
+	}
+	return uploadCount
 }

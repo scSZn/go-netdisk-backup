@@ -11,8 +11,10 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"gopkg.in/yaml.v3"
 
+	"backup/consts"
 	"backup/internal/config"
 	"backup/pkg/logger"
+	"backup/ui/upload_ui"
 	ui_util "backup/ui/util"
 )
 
@@ -32,13 +34,10 @@ func NewUploadConfigCard(window fyne.Window) *UploadConfigCard {
 }
 
 func (c *UploadConfigCard) buildCard() *widget.Card {
-	uploadCount := config.UploadConfigViper.GetInt(config.UploadCountKey)
-	if uploadCount == 0 {
-		uploadCount = 3
-	}
+	uploadCount := config.GetUploadCount()
 	c.slider = &widget.Slider{
 		Min:   1,
-		Max:   5,
+		Max:   10,
 		Value: float64(uploadCount),
 		Step:  1,
 		OnChanged: func(f float64) {
@@ -81,11 +80,11 @@ func (c *UploadConfigCard) SaveConfig() {
 	}
 
 	data, err := yaml.Marshal(map[string]int{
-		config.UploadCountKey: value,
+		consts.UploadCountKey: value,
 	})
 	if err != nil {
 		logger.Logger.WithField("path", config.UploadConfigPath).WithField("config", map[string]int{
-			config.UploadCountKey: value,
+			consts.UploadCountKey: value,
 		}).WithError(err).Error("marshal data fail")
 		ui_util.ShowErrorDialog("保存配置失败", c.window)
 		return
@@ -94,12 +93,13 @@ func (c *UploadConfigCard) SaveConfig() {
 	_, err = file.Write(data)
 	if err != nil {
 		logger.Logger.WithField("path", config.UploadConfigPath).WithField("config", map[string]int{
-			config.UploadCountKey: value,
+			consts.UploadCountKey: value,
 		}).WithError(err).Error("write file fail")
 		ui_util.ShowErrorDialog("保存配置失败", c.window)
 		return
 	}
 	ui_util.ShowInfoDialog("保存配置成功", c.window)
+	upload_ui.ExportUploadList.AddSignal()
 
 	// 有可能文件不存在，这里补充配置
 	config.UploadConfigViper.SetConfigFile(config.UploadConfigPath)

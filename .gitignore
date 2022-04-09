@@ -5,7 +5,7 @@
 /test/
 *.db
 /ui/token_ui/
-/pcs_config.yaml
 /token.json
 *.exe
 *.syso
+*.yaml
