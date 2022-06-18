@@ -31,7 +31,13 @@ func (l *LogFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 	// 拼装消息
 	for k, v := range entry.Data {
-		vStr, err := jsoniter.MarshalToString(v)
+		var vStr string
+		var err error
+		if k == logrus.ErrorKey { // 这样可以把errors包中的cause给打印出来
+			vStr = fmt.Sprintf("%+v", v)
+		} else {
+			vStr, err = jsoniter.MarshalToString(v)
+		}
 		if err != nil {
 			return nil, err
 		}

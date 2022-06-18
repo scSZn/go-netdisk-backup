@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pkg/errors"
+
 	"backup/consts"
 	"backup/pkg/byte_pool"
 	"backup/pkg/logger"
@@ -19,23 +21,20 @@ func GetBlockList(ctx context.Context, filename string) ([]string, error) {
 
 	file, err := os.OpenFile(filename, os.O_RDONLY, 0644)
 	if err != nil {
-		baseLogger.WithError(err).Errorf("open file fail")
-		return nil, err
+		return nil, errors.Wrap(err, "open file fail")
 	}
 	defer file.Close()
 
 	stat, err := file.Stat()
 	if err != nil {
-		baseLogger.WithError(err).Errorf("get file stat fail")
-		return nil, err
+		return nil, errors.Wrap(err, "get file stat fail")
 	}
 
 	number := (stat.Size() + consts.Size4MB - 1) / consts.Size4MB
 	if number == 0 {
 		block, err := Md5(ctx, nil)
 		if err != nil {
-			baseLogger.WithError(err).Errorf("md5 encode fail")
-			return nil, err
+			return nil, errors.Wrap(err, "md5 encode fail")
 		}
 		return []string{block}, nil
 	}
@@ -47,7 +46,7 @@ func GetBlockList(ctx context.Context, filename string) ([]string, error) {
 		n, err := file.Read(chunk)
 		if err != nil && err != io.EOF {
 			baseLogger.WithError(err).WithField("filename", filename).Errorf("read file fail fail")
-			return nil, err
+			return nil, errors.Wrapf(err, "read file fail fail")
 		}
 		if n == 0 || err == io.EOF {
 			break

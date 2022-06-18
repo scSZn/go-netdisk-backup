@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
@@ -13,24 +12,143 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 
 	"backup/consts"
 	"backup/internal/token"
 	"backup/pkg/byte_pool"
-	"backup/pkg/group"
 	"backup/pkg/logger"
+	"backup/pkg/work_pool"
 )
 
-const RetryCount = 3
+func pcsUpload(ctx context.Context, uploadReq *uploadRequest) error {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithField("uploadReq", uploadReq).Info("pcs upload start")
 
-type UploadParams struct {
-	Path     string `json:"path"`
-	UploadId string `json:"uploadid"`
-	PartSeq  int    `json:"partseq"`
-	File     []byte `json:"-"`
+	if len(uploadReq.PartSeq) == 0 {
+		uploadReq.PartSeq = append(uploadReq.PartSeq, 0)
+	}
+	file, err := os.OpenFile(uploadReq.Filename, os.O_RDONLY, 0644)
+	if err != nil {
+		return errors.Wrap(err, "open file fail")
+	}
+	defer file.Close()
+
+	var group = work_pool.NewTaskGroup(ctx, len(uploadReq.PartSeq))
+	group.RunFail = func(ctx context.Context, task *work_pool.Task, err error) {
+		baseLogger.WithFields(map[string]interface{}{
+			"task":          task,
+			logrus.ErrorKey: err,
+		}).WithError(err).Errorf("task execute fail, retry")
+
+		err = task.Retry(p)
+		if err != nil {
+			baseLogger.WithFields(map[string]interface{}{
+				"task":          task,
+				logrus.ErrorKey: err,
+			}).Errorf("task retry fail")
+			group.Fail(err)
+		}
+	}
+	group.RunSuccess = func(ctx context.Context, task *work_pool.Task) {
+		uploadReq.RefreshFunc()
+	}
+	for _, seq := range uploadReq.PartSeq {
+		chunk := byte_pool.DefaultBytePool.Get()
+		n, err := file.Read(chunk)
+		if err != nil {
+			return errors.Wrap(err, "read chunk from file")
+		}
+
+		params := &uploadTaskParams{
+			UploadId:   uploadReq.UploadId,
+			ServerPath: uploadReq.ServerPath,
+			PartSeq:    seq,
+			Content:    chunk[:n],
+		}
+
+		task := work_pool.NewTask(group, fmt.Sprintf("%s_%d", uploadReq.ServerPath, seq), consts.MaxRetryCount)
+		task.Run = func(ctx context.Context, task *work_pool.Task) error {
+			return uploadChunk(ctx, params, http.DefaultClient)
+		}
+
+		baseLogger.WithField("task", task).Info("task submit")
+
+		err = p.Submit(task)
+		if err != nil {
+			return errors.Wrap(err, "submit task fail")
+		}
+	}
+
+	if err = group.Wait(); err != nil {
+		return errors.Wrapf(err, "group task run fail")
+	}
+
+	baseLogger.WithField("filename", uploadReq.Filename).Info("pcs upload success")
+	return nil
 }
 
-type UploadResponse struct {
+func uploadChunk(ctx context.Context, params *uploadTaskParams, client *http.Client) error {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithFields(map[string]interface{}{
+		"params":        params,
+		"file_size(B)":  len(params.Content),
+		"file_size(KB)": len(params.Content) / 1024,
+		"file_size(MB)": len(params.Content) / 1024 / 1024,
+	}).Info("pcs upload chunk start")
+
+	request, err := params.GenerateRequest(ctx, params.ServerPath)
+	if err != nil {
+		return errors.Wrap(err, "generate upload request fail")
+	}
+	request.WithContext(ctx)
+	response, err := client.Do(request)
+	if err != nil {
+		return errors.Wrap(err, "upload request fail")
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return errors.Errorf("response status code is %v", response.StatusCode)
+	}
+
+	data, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return errors.Wrap(err, "read response data fail")
+	}
+	baseLogger.WithField("response_body", string(data)).Info()
+
+	if string(data) == "" {
+		return errors.New("response body data is empty")
+	}
+	var resp = &uploadResponse{}
+	err = jsoniter.Unmarshal(data, &resp)
+	if err != nil {
+		return errors.Wrap(err, "unmarshal response fail")
+	}
+
+	if resp.Errno != consts.ErrnoSuccess || resp.ErrorCode != consts.ErrnoSuccess {
+		return errors.Errorf("upload chunk fail")
+	}
+
+	byte_pool.DefaultBytePool.Put(params.Content)
+	baseLogger.WithError(err).WithField("response", resp).Info("upload chunk success")
+	return nil
+}
+
+type uploadRequest struct {
+	UploadId    string `json:"upload_id"`
+	ServerPath  string `json:"server_path"`
+	PartSeq     []int  `json:"part_seq"`
+	Filename    string `json:"filename"`
+	RefreshFunc func() `json:"-"`
+}
+
+func NewUploadRequest(uploadId string, serverPath string, partSeq []int, filename string, refreshFunc func()) *uploadRequest {
+	return &uploadRequest{UploadId: uploadId, ServerPath: serverPath, PartSeq: partSeq, Filename: filename, RefreshFunc: refreshFunc}
+}
+
+type uploadResponse struct {
 	Errno     int    `json:"errno"`
 	Md5       string `json:"md5"`
 	ErrorCode int    `json:"error_code"`
@@ -38,161 +156,66 @@ type UploadResponse struct {
 	RequestId int64  `json:"request_id"`
 }
 
-func Upload(ctx context.Context, uploadId string, path string, partSeq []int, filename string) error {
-	logger.Logger.WithContext(ctx).WithField("filename", filename).Info("begin upload")
-	if len(partSeq) == 0 {
-		partSeq = append(partSeq, 0)
-	}
-	file, err := os.OpenFile(filename, os.O_RDONLY, 0644)
-	if err != nil {
-		logger.Logger.WithContext(ctx).WithError(err).WithField("filename", filename).Error("open file fail")
-		return err
-	}
-	defer file.Close()
-
-	sendGroup := group.NewMyGroup(ctx, 3, 3).WithContext(ctx).WithErrorStrategy(&RetryStrategy{MaxTime: RetryCount})
-	sendGroup.Start()
-	for _, seq := range partSeq {
-		chunk := byte_pool.DefaultBytePool.Get()
-		n, err := file.Read(chunk)
-		if err != nil && err != io.EOF {
-			logger.Logger.WithContext(ctx).WithError(err).WithField("filename", filename).Error("read file fail")
-			return err
-		}
-
-		params := &UploadParams{
-			UploadId: uploadId,
-			Path:     path,
-			PartSeq:  seq,
-			File:     chunk[:n],
-		}
-
-		task := &UploadTask{
-			Name:   fmt.Sprintf("%s_%d", path, seq),
-			Params: params,
-		}
-
-		var retryCounter = 0
-		for retryCounter < RetryCount {
-			err = sendGroup.Submit(task)
-			if err == nil {
-				break
-			}
-			logger.Logger.WithError(err).WithContext(ctx).WithField("taskName", task.Name).Warn("task submit fail")
-			retryCounter++
-		}
-	}
-
-	if err = sendGroup.Wait(); err != nil {
-		logger.Logger.WithError(err).WithField("filename", filename).Error("upload fail")
-		return err
-	}
-	logger.Logger.WithContext(ctx).WithField("filename", filename).Info("end upload")
-	return nil
+type uploadTaskParams struct {
+	ServerPath string `json:"path"`
+	UploadId   string `json:"uploadid"`
+	PartSeq    int    `json:"partseq"`
+	Content    []byte `json:"-"`
 }
 
-func uploadSlice(ctx context.Context, params *UploadParams) error {
-	request, err := params.GenerateRequest(ctx, params.Path)
-	if err != nil {
-		logger.Logger.WithContext(ctx).WithError(err).Error("generate request fail")
-		return err
-	}
-
-	logger.Logger.WithContext(ctx).WithField("params", params).Info("upload file start")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		logger.Logger.WithContext(ctx).WithError(err).Error("upload file fail")
-		return err
-	}
-
-	defer response.Body.Close()
-	logger.Logger.WithContext(ctx).WithField("params", params).WithField("response", fmt.Sprintf("%+v", response)).Info("upload file end")
-
-	data, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		logger.Logger.WithContext(ctx).WithError(err).Error("read response data fail")
-		return err
-	}
-
-	var resp = &UploadResponse{}
-	err = jsoniter.Unmarshal(data, &resp)
-	if err != nil {
-		logger.Logger.WithContext(ctx).WithError(err).WithField("resp", string(data)).Error("unmarshal response fail")
-		return err
-	}
-
-	if resp.Errno != consts.ErrnoSuccess || resp.ErrorCode != consts.ErrnoSuccess {
-		err = errors.Errorf("upload fail")
-		logger.Logger.WithContext(ctx).WithError(err).WithField("response", resp).Error("upload fail")
-		return err
-	}
-
-	byte_pool.DefaultBytePool.Put(params.File)
-
-	return nil
-}
-
-func (p *UploadParams) GenerateRequest(ctx context.Context, filename string) (*http.Request, error) {
+func (p *uploadTaskParams) GenerateRequest(ctx context.Context, filename string) (*http.Request, error) {
 	baseLogger := logger.Logger.WithContext(ctx)
-	baseLogger.WithField("filename", filename).Info("pcs upload slice: request generate start")
+	baseLogger.WithField("filename", filename).Info("generate request start")
 
 	address := fmt.Sprintf("https://d.pcs.baidu.com/rest/2.0/pcs/superfile2?method=%s&access_token=%s", consts.MethodUpload, token.AccessToken)
 
 	encodeString, err := p.GenEncodeString(ctx)
 	if err != nil {
-		baseLogger.WithError(err).Error("pcs upload slice: generate encode string fail")
-		return nil, err
+		return nil, errors.Wrap(err, "generate encode string fail")
 	}
 
 	address = fmt.Sprintf("%s&%s", address, encodeString)
-
 	buffer := bytes.NewBufferString("")
 	writer := multipart.NewWriter(buffer)
 
 	part, err := writer.CreateFormFile("file", filename)
 	if err != nil {
-		baseLogger.WithError(err).Error("pcs upload slice: create file fail")
-		return nil, err
+		return nil, errors.Wrap(err, "create form file fail")
 	}
 
-	_, err = part.Write(p.File)
+	_, err = part.Write(p.Content)
 	if err != nil {
-		baseLogger.WithError(err).Error("pcs upload slice: write to file fail")
-		return nil, err
+		return nil, errors.Wrap(err, "write to form file fail")
 	}
 
 	err = writer.Close()
 	if err != nil {
-		baseLogger.WithError(err).Error("pcs upload slice: close file fail")
-		return nil, err
+		return nil, errors.Wrap(err, "close form file fail")
 	}
 
 	req, err := http.NewRequest("POST", address, buffer)
 	if err != nil {
-		baseLogger.WithError(err).Error("pcs upload slice: request generate fail")
-		return nil, err
+		return nil, errors.Wrap(err, "request generate fail")
 	}
 
 	req.Header.Add("Content-Type", writer.FormDataContentType())
-	baseLogger.Info("pcs upload slice: request generate success")
+	baseLogger.Info("generate request success")
 	return req, nil
 }
 
-func (p *UploadParams) GenEncodeString(ctx context.Context) (string, error) {
+func (p *uploadTaskParams) GenEncodeString(ctx context.Context) (string, error) {
 	baseLogger := logger.Logger.WithContext(ctx)
-	baseLogger.WithField("params", p).Info("pcs upload slice: generate encode string start")
+	baseLogger.WithField("params", p).Info("generate encode string start")
 
 	body, err := jsoniter.Marshal(p)
 	if err != nil {
-		baseLogger.WithField("params", p).WithError(err).Errorf("marshal params fail")
-		return "", err
+		return "", errors.Wrap(err, "marshal params fail")
 	}
 
 	var param = map[string]interface{}{}
 	err = jsoniter.Unmarshal(body, &param)
 	if err != nil {
-		baseLogger.WithField("params", p).WithError(err).Errorf("unmarshal params fail")
-		return "", err
+		return "", errors.Wrap(err, "unmarshal params fail")
 	}
 	var values = url.Values{}
 	for key, value := range param {
@@ -201,38 +224,6 @@ func (p *UploadParams) GenEncodeString(ctx context.Context) (string, error) {
 	values.Set("type", "tmpfile")
 	res := values.Encode()
 
-	baseLogger.WithField("result", res).Info("pcs upload slice: generate encoding string success")
+	baseLogger.WithField("result", res).Info("generate encoding string end")
 	return res, nil
-}
-
-type UploadTask struct {
-	Name       string        `json:"name"`
-	RetryCount int           `json:"retry_count"`
-	Params     *UploadParams `json:"params"`
-}
-
-func (r *UploadTask) Run(ctx context.Context) error {
-	return uploadSlice(ctx, r.Params)
-}
-
-type RetryStrategy struct {
-	MaxTime int
-}
-
-func (s RetryStrategy) ErrorDeal(group *group.MyGroup, err error, task group.TaskInterface) {
-	retryTask, ok := task.(*UploadTask)
-	if ok && retryTask.RetryCount < s.MaxTime {
-		retryTask.RetryCount++
-		logger.Logger.WithError(err).WithField("taskName", retryTask.Name).Errorf("task retry %v times", retryTask.RetryCount)
-		err = group.Submit(task)
-		if err != nil {
-			s.ErrorDeal(group, err, task)
-		}
-	} else {
-		logger.Logger.WithError(err).WithField("taskName", retryTask.Name).Errorf("task execute fail")
-		group.Once.Do(func() {
-			group.Err = err
-			group.Stop()
-		})
-	}
 }

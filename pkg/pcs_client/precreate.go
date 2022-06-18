@@ -7,17 +7,66 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path"
 	"strings"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
 
 	"backup/consts"
+	"backup/internal/config"
 	"backup/internal/token"
 	"backup/pkg/logger"
+	"backup/pkg/util"
 )
 
-type PreCreateParams struct {
+func pcsPreCreate(ctx context.Context, preCreateReq *preCreateRequest) (*preCreateResponse, error) {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithField("preCreateReq", preCreateReq).Info("pcs precreate start")
+
+	preCreateReq.AutoInit = consts.AutoInitConstant
+	encodeString, err := preCreateReq.GenEncodeString(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "construct encode string fail")
+	}
+
+	address := fmt.Sprintf("http://pan.baidu.com/rest/2.0/xpan/file?method=%s&access_token=%s", consts.MethodPrecreate, token.AccessToken)
+	req, err := http.NewRequest(http.MethodPost, address, bytes.NewBufferString(encodeString))
+	if err != nil {
+		return nil, errors.Wrap(err, "construct request fail")
+	}
+	req = req.WithContext(ctx)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, errors.Wrap(err, "precreate request fail")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.Errorf("response status code is %+v", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	baseLogger.WithField("response_body", string(data)).Info("pcs precreate response")
+
+	var preCreateResp = &preCreateResponse{}
+	err = jsoniter.Unmarshal(data, preCreateResp)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal params fail")
+	}
+
+	if preCreateResp.Errno != consts.ErrnoSuccess {
+		return preCreateResp, errors.Errorf("errno isn't 0, preCreateResp is [%+v]", resp)
+	}
+
+	baseLogger.WithField("preCreateResp", preCreateResp).Info("pcs precreate success")
+	return preCreateResp, nil
+}
+
+type preCreateRequest struct {
 	Path         string   `json:"path" bind:"required"`  // 上传文件的绝对路径
 	Size         int64    `json:"size" bind:"required"`  // 文件大小，单位为B
 	IsDir        uint8    `json:"isdir" bind:"required"` // 0 文件，1 目录
@@ -32,7 +81,7 @@ type PreCreateParams struct {
 	LocalMTime   string   `json:"local_mtime,omitempty"`              // 客户端修改时间
 }
 
-type PreCreateResponse struct {
+type preCreateResponse struct {
 	Errno      int    `json:"errno"`
 	Path       string `json:"path"`        // 文件的绝对路径
 	UploadId   string `json:"uploadid"`    // 上传ID
@@ -40,60 +89,48 @@ type PreCreateResponse struct {
 	BlockList  []int  `json:"block_list"`  // 需要上传的分片序号列表，索引从0开始
 }
 
-func pcsPreCreate(ctx context.Context, params *PreCreateParams) (*PreCreateResponse, error) {
+func NewPreCreateRequest(ctx context.Context, filename, serverPath string) (*preCreateRequest, error) {
 	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithFields(map[string]interface{}{
+		"filename":   filename,
+		"serverPath": serverPath,
+	})
 
-	baseLogger.WithField("params", params).Info("pcs precreate begin")
-	params.AutoInit = consts.AutoInitConstant
-	encodeString, err := params.GenEncodeString(ctx)
+	baseLogger.Infof("construct preCreateRequest start")
+	if serverPath == "" {
+		return nil, errors.Errorf("serverFilename is empty, filename is %s", filename)
+	}
+	list, err := util.GetBlockList(ctx, filename)
 	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Errorf("construct encode string fail")
-		return nil, err
+		return nil, errors.Wrap(err, "get block list fail")
 	}
 
-	address := fmt.Sprintf("http://pan.baidu.com/rest/2.0/xpan/file?method=%s&access_token=%s", consts.MethodPrecreate, token.AccessToken)
-	req, err := http.NewRequest(http.MethodPost, address, bytes.NewBufferString(encodeString))
+	serverPath = path.Join(config.Config.PcsConfig.PathPrefix, serverPath)
+	stat, err := os.Stat(filename)
 	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Errorf("construct request fail")
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	response, err := http.DefaultClient.Do(req)
-	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Errorf("pcs precreate request fail")
-		return nil, err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		baseLogger.WithField("response", response).Error("response status code is not 200")
-		return nil, errors.Errorf("response status code is not 200")
+		return nil, errors.Wrap(err, "get file stat fail")
 	}
 
-	data, err := io.ReadAll(response.Body)
-	baseLogger.WithField("response", string(data)).Info("pcs precreate response")
-
-	var resp = &PreCreateResponse{}
-	err = jsoniter.Unmarshal(data, resp)
-	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Error("unmarshal params fail")
-		return nil, err
+	var isDir uint8 = 0
+	if stat.IsDir() {
+		isDir = 1
 	}
 
-	if resp.Errno != consts.ErrnoSuccess {
-		err = errors.Errorf("precreate errno isn't 0")
-		baseLogger.WithField("precreateResp", resp).WithError(err).Error("pcs precreate fail")
-		return resp, err
+	request := &preCreateRequest{
+		Path:      serverPath,
+		Size:      stat.Size(),
+		IsDir:     isDir,
+		BlockList: list,
+		RType:     consts.RTypeOverride,
 	}
 
-	baseLogger.WithField("precreateResp", resp).Info("pcs precreate success")
-	return resp, nil
+	baseLogger.WithField("result", request).Infof("construct preCreateRequest end")
+	return request, nil
 }
 
-func (c *PreCreateParams) GenEncodeString(ctx context.Context) (string, error) {
+func (c *preCreateRequest) GenEncodeString(ctx context.Context) (string, error) {
 	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.Infof("generate encode string start")
 
 	tempListStr := make([]string, 0, len(c.BlockListStr))
 	for _, str := range c.BlockList {
@@ -103,15 +140,13 @@ func (c *PreCreateParams) GenEncodeString(ctx context.Context) (string, error) {
 
 	body, err := jsoniter.Marshal(c)
 	if err != nil {
-		baseLogger.WithField("params", c).WithError(err).Errorf("marshal params fail")
-		return "", err
+		return "", errors.Wrap(err, "marshal params fail")
 	}
 
 	var param = map[string]interface{}{}
 	err = jsoniter.Unmarshal(body, &param)
 	if err != nil {
-		baseLogger.WithField("params", c).WithError(err).Errorf("unmarshal params fail")
-		return "", err
+		return "", errors.Wrap(err, "unmarshal params fail")
 	}
 	var values = url.Values{}
 	for key, value := range param {
@@ -125,6 +160,6 @@ func (c *PreCreateParams) GenEncodeString(ctx context.Context) (string, error) {
 	}
 
 	var res = values.Encode()
-	baseLogger.WithField("res", res).Info("generate encoding string")
+	baseLogger.WithField("result", res).Info("generate encoding string end")
 	return res, nil
 }

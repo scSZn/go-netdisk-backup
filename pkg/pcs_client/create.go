@@ -17,7 +17,52 @@ import (
 	"backup/pkg/logger"
 )
 
-type CreateParams struct {
+func pcsCreate(ctx context.Context, createReq *createRequest) (*createResponse, error) {
+	baseLogger := logger.Logger.WithContext(ctx)
+	baseLogger.WithField("createReq", createReq).Info("pcs create start")
+
+	address := fmt.Sprintf("https://pan.baidu.com/rest/2.0/xpan/file?method=%s&access_token=%s", consts.MethodCreate, token.AccessToken)
+
+	encodeString, err := createReq.GenEncodeString(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "construct encode string fail")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, address, bytes.NewBufferString(encodeString))
+	if err != nil {
+		return nil, errors.Wrap(err, "construct request fail")
+	}
+	req = req.WithContext(ctx)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, errors.Wrap(err, "request fail")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.Errorf("response status code is %+v", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	baseLogger.WithField("response_body", string(data)).Info("pcs create: response body")
+
+	var createResp = &createResponse{}
+	err = jsoniter.Unmarshal(data, resp)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal createResp fail")
+	}
+
+	if createResp.Errno != consts.ErrnoSuccess {
+		return nil, errors.Errorf("errno is not zero")
+	}
+
+	baseLogger.WithField("createResp", createResp).Info("pcs create: create success")
+	return createResp, nil
+}
+
+type createRequest struct {
 	Path         string   `json:"path,omitempty" bind:"required"` // 上传文件的绝对路径
 	Size         int64    `json:"size,omitempty" bind:"required"` // 文件大小，单位为B
 	IsDir        uint8    `json:"isdir" bind:"required"`          // 0 文件，1 目录
@@ -34,7 +79,7 @@ type CreateParams struct {
 	//ExifInfo     ExifInfo `json:"exif_info"`                  // 图片的ExifInfo信息
 }
 
-type CreateResponse struct {
+type createResponse struct {
 	Errno          int    `json:"errno"`
 	FsId           int64  `json:"fs_id"`
 	Md5            string `json:"md5"`
@@ -48,60 +93,9 @@ type CreateResponse struct {
 	Name           string `json:"name"`
 }
 
-func pcsCreate(ctx context.Context, params *CreateParams) (*CreateResponse, error) {
+func (c *createRequest) GenEncodeString(ctx context.Context) (string, error) {
 	baseLogger := logger.Logger.WithContext(ctx)
-	baseLogger.WithField("params", params).Info("pcs create start")
-
-	address := fmt.Sprintf("https://pan.baidu.com/rest/2.0/xpan/file?method=%s&access_token=%s", consts.MethodCreate, token.AccessToken)
-
-	encodeString, err := params.GenEncodeString(ctx)
-	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: construct encode string fail")
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, address, bytes.NewBufferString(encodeString))
-	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: construct request fail")
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	response, err := http.DefaultClient.Do(req)
-	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: request fail")
-		return nil, err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		baseLogger.WithField("response", response).Error("response status code is not 200")
-		return nil, errors.Errorf("response status code is not 200")
-	}
-
-	data, err := io.ReadAll(response.Body)
-	baseLogger.WithField("response_body", string(data)).Info("pcs create: response body")
-
-	var resp = &CreateResponse{}
-	err = jsoniter.Unmarshal(data, resp)
-	if err != nil {
-		baseLogger.WithField("params", params).WithError(err).Errorf("pcs create: unmarshal response fail")
-		return nil, err
-	}
-
-	if resp.Errno != consts.ErrnoSuccess {
-		baseLogger.WithField("response", resp).Error("pcs create: errno is not zero")
-		return nil, fmt.Errorf("create fail")
-	}
-
-	baseLogger.WithField("response", resp).Info("pcs create: create success")
-	return resp, nil
-}
-
-func (c *CreateParams) GenEncodeString(ctx context.Context) (string, error) {
-	baseLogger := logger.Logger.WithContext(ctx)
-	baseLogger.WithField("params", c).Info("pcs create: generate encode string start")
+	baseLogger.Info("generate encode string start")
 
 	tempListStr := make([]string, 0, len(c.BlockListStr))
 	for _, str := range c.BlockList {
@@ -111,15 +105,13 @@ func (c *CreateParams) GenEncodeString(ctx context.Context) (string, error) {
 
 	body, err := jsoniter.Marshal(c)
 	if err != nil {
-		baseLogger.WithField("params", c).WithError(err).Errorf("marshal params fail")
-		return "", err
+		return "", errors.Wrap(err, "marshal params fail")
 	}
 
 	var param = map[string]interface{}{}
 	err = jsoniter.Unmarshal(body, &param)
 	if err != nil {
-		baseLogger.WithField("params", c).WithError(err).Errorf("unmarshal params fail")
-		return "", err
+		return "", errors.Wrap(err, "unmarshal params fail")
 	}
 	var values = url.Values{}
 	for key, value := range param {

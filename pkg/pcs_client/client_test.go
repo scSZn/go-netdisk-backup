@@ -2,33 +2,46 @@ package pcs_client
 
 import (
 	"context"
+	"fmt"
+	"log"
+	"net/http"
+	_ "net/http/pprof"
+	"sync/atomic"
 	"testing"
 )
 
-func TestUploadFile(t *testing.T) {
+func TestUpload(t *testing.T) {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:8080", nil))
+	}()
 	type args struct {
-		ctx            context.Context
-		filename       string
-		serverFilename string
+		ctx    context.Context
+		params *UploadParams
 	}
+	var count int64
 	tests := []struct {
 		name    string
 		args    args
 		wantErr bool
 	}{
 		{
-			name: "UploadFileTest",
+			name: "test",
 			args: args{
-				ctx:            context.TODO(),
-				filename:       "E:\\Temp\\2020年12月四级真题\\2020年12月英语四级解析第1套.pdf",
-				serverFilename: "/apps/test/Temp\\2020年12月四级真题\\2020年12月英语四级解析第1套.pdf",
+				ctx: context.Background(),
+				params: NewUploadParams("E:\\Test\\Hello.txt", "hello.txt", func() {
+					newValue := atomic.AddInt64(&count, 1)
+					fmt.Printf("当前进度为 %d\n", newValue)
+				}, func() {
+					fmt.Printf("上传完成")
+				}),
 			},
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := UploadFileWithSignal(tt.args.ctx, tt.args.filename, tt.args.serverFilename, nil); (err != nil) != tt.wantErr {
-				t.Errorf("UploadFile() error = %v, wantErr %v", err, tt.wantErr)
+			if err := Upload(tt.args.ctx, tt.args.params); (err != nil) != tt.wantErr {
+				t.Errorf("Upload() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

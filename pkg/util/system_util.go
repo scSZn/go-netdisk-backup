@@ -9,15 +9,20 @@ import (
 	"backup/internal/config"
 )
 
-var commands = map[string]string{
+var browserCommands = map[string]string{
 	"windows": "cmd",
 	"darwin":  "open",
 	"linux":   "xdg-open",
 }
 
+var explorerCommands = map[string]string{
+	"windows": "explorer",
+	"darwin":  "open",
+}
+
 func OpenBrowser() error {
 	url := fmt.Sprintf(consts.AuthorizationCodeUrl, config.Config.PcsConfig.AppKey)
-	run, ok := commands[runtime.GOOS]
+	run, ok := browserCommands[runtime.GOOS]
 	if !ok {
 		return fmt.Errorf("don't know how to open things on %s platform", runtime.GOOS)
 	}
@@ -29,5 +34,16 @@ func OpenBrowser() error {
 	} else {
 		cmd = exec.Command(run, url)
 	}
+	return cmd.Run()
+}
+
+func OpenExplorer(path string) error {
+	run, ok := explorerCommands[runtime.GOOS]
+	if !ok {
+		return fmt.Errorf("don't know how to open things on %s platform", runtime.GOOS)
+	}
+
+	var cmd *exec.Cmd
+	cmd = exec.Command(run, path)
 	return cmd.Run()
 }
